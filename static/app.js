@@ -205,16 +205,18 @@
           : (respBody.detail || respBody.message || r.statusText);
         throw new Error(msg);
       }
-      pollInterval = setInterval(pollStatus, 1500);
-      pollStatus();
+      const currentScanId = respBody.scan_id || null;
+      pollInterval = setInterval(() => pollStatus(currentScanId), 1500);
+      pollStatus(currentScanId);
     } catch (e) {
       alert('Ошибка: ' + e.message);
       startScanBtn.disabled = false;
     }
   });
 
-  function pollStatus() {
-    fetch('/api/scan/status')
+  function pollStatus(scanId) {
+    const url = scanId ? '/api/scan/status?scan_id=' + encodeURIComponent(scanId) : '/api/scan/status';
+    fetch(url)
       .then(r => r.json())
       .then(data => {
         hotelsLoaded.textContent = data.hotels_loaded || 0;

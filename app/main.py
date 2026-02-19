@@ -28,8 +28,9 @@ if STATIC_DIR.exists():
 
 env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 
-# Active scan state
-_active_scan: Optional[Dict[str, Any]] = None
+# Scan state: scan_id -> {scan_id, progress, results, done, error}
+_scans: Dict[str, Dict[str, Any]] = {}
+_MAX_SCANS = 50
 
 
 def _render(name: str, **kwargs: Any) -> str:
@@ -79,9 +80,17 @@ async def api_cities(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(e))
 
 
+def _prune_scans() -> None:
+    global _scans
+    while len(_scans) >= _MAX_SCANS:
+        done_ids = [sid for sid in list(_scans.keys()) if _scans[sid].get("done")]
+        remove_id = done_ids[0] if done_ids else next(iter(_scans.keys()))
+        del _scans[remove_id]
+
+
 @app.post("/api/scan")
 async def api_scan_start(request: Request) -> Dict[str, Any]:
-    global _active_scan
+    global _scans
     try:
         body = await request.json() or {}
     except Exception:
@@ -109,12 +118,10 @@ async def api_scan_start(request: Request) -> Dict[str, Any]:
     if not get_api_key():
         raise HTTPException(status_code=400, detail="API key not configured")
 
-    if _active_scan and not _active_scan.get("done"):
-        raise HTTPException(status_code=409, detail="Scan already in progress")
-
+    _prune_scans()
     scan_id = str(uuid.uuid4())
     progress = ScanProgress()
-    _active_scan = {
+    _scans[scan_id] = {
         "scan_id": scan_id,
         "progress": progress,
         "results": None,
@@ -123,7 +130,6 @@ async def api_scan_start(request: Request) -> Dict[str, Any]:
     }
 
     async def _run() -> None:
-        global _active_scan
         try:
             results = await run_scan(
                 city_ids=city_ids,
@@ -131,14 +137,14 @@ async def api_scan_start(request: Request) -> Dict[str, Any]:
                 rps=rps,
                 progress=progress,
             )
-            if _active_scan and _active_scan.get("scan_id") == scan_id:
-                _active_scan["results"] = results
-                _active_scan["done"] = True
+            if scan_id in _scans:
+                _scans[scan_id]["results"] = results
+                _scans[scan_id]["done"] = True
         except Exception as e:
-            if _active_scan and _active_scan.get("scan_id") == scan_id:
-                _active_scan["error"] = str(e)
-                _active_scan["done"] = True
-                _active_scan["progress"].error = str(e)
+            if scan_id in _scans:
+                _scans[scan_id]["error"] = str(e)
+                _scans[scan_id]["done"] = True
+                _scans[scan_id]["progress"].error = str(e)
 
     asyncio.create_task(_run())
 
@@ -147,10 +153,12 @@ async def api_scan_start(request: Request) -> Dict[str, Any]:
 
 @app.get("/api/scan/status")
 async def api_scan_status(request: Request) -> Dict[str, Any]:
-    global _active_scan
+    global _scans
     stats = get_stats()
+    scan_id = request.query_params.get("scan_id")
+    scan = _scans.get(scan_id) if scan_id else (list(_scans.values())[-1] if _scans else None)
 
-    if not _active_scan:
+    if not scan:
         return {
             "active": False,
             "done": True,
@@ -163,21 +171,21 @@ async def api_scan_status(request: Request) -> Dict[str, Any]:
             "progress_pct": 0,
         }
 
-    p = _active_scan["progress"]
+    p = scan["progress"]
     resp = {
-        "active": not _active_scan.get("done"),
-        "done": _active_scan.get("done", False),
+        "active": not scan.get("done"),
+        "done": scan.get("done", False),
         "hotels_loaded": p.hotels_loaded,
         "comparisons_done": p.comparisons_done,
         "flags_found": p.flags_found,
         "results": None,
-        "error": _active_scan.get("error") or p.error,
+        "error": scan.get("error") or p.error,
         "stats": stats,
-        "progress_pct": getattr(p, "progress_pct", 100 if _active_scan.get("done") else 0),
+        "progress_pct": getattr(p, "progress_pct", 100 if scan.get("done") else 0),
     }
 
-    if _active_scan.get("done") and _active_scan.get("results") is not None:
-        resp["results"] = _pairs_to_rows(_active_scan["results"])
+    if scan.get("done") and scan.get("results") is not None:
+        resp["results"] = _pairs_to_rows(scan["results"])
 
     return resp
 
