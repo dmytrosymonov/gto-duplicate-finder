@@ -1,0 +1,278 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  margin: 0;
+  padding: 20px;
+  background: #f5f5f5;
+  color: #1a1a1a;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+header h1 {
+  margin: 0 0 24px;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+section {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+section h2 {
+  margin: 0 0 16px;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.row {
+  margin-bottom: 12px;
+}
+
+.row label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.9rem;
+  color: #555;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+select {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  min-width: 200px;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: #0066cc;
+}
+
+button {
+  padding: 8px 16px;
+  background: #0066cc;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #0052a3;
+}
+
+button:disabled {
+  background: #999;
+  cursor: not-allowed;
+}
+
+.hint {
+  margin-left: 8px;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 4px;
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.api-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+
+.progress-bar {
+  height: 8px;
+  background: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #0066cc;
+  width: 0%;
+  transition: width 0.2s;
+}
+
+.progress-pct {
+  margin-top: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.table-wrapper a {
+  color: #0066cc;
+  text-decoration: none;
+}
+
+.table-wrapper a:hover {
+  text-decoration: underline;
+}
+
+.filters {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.filters label {
+  font-size: 0.9rem;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+th {
+  background: #f8f9fa;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+th:hover {
+  background: #eee;
+}
+
+tbody tr:hover {
+  background: #f8f9fa;
+}
+
+td {
+  font-size: 0.9rem;
+}
+
+.badge-auto {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  background: #28a745;
+  color: #fff;
+  border-radius: 4px;
+}
+
+.badge-review {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  background: #ffc107;
+  color: #1a1a1a;
+  border-radius: 4px;
+}
+
+.city-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.city-list {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.city-list-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #eee;
+  user-select: none;
+}
+
+.city-list-item:hover {
+  background: #f0f8ff;
+}
+
+.city-list-item.selected {
+  background: #e6f2ff;
+}
+
+.selected-cities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 36px;
+}
+
+.city-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #0066cc;
+  color: #fff;
+  border-radius: 16px;
+  font-size: 0.9rem;
+}
+
+.city-chip button {
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.5);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border: none;
+}
+
+.city-chip button:hover {
+  background: rgba(255,255,255,0.8);
+  color: #1a1a1a;
+}
