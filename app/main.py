@@ -1,7 +1,9 @@
 """FastAPI application - web UI and API endpoints."""
 import asyncio
 import io
+import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -28,9 +30,39 @@ if STATIC_DIR.exists():
 
 env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
 
-# Scan state: scan_id -> {scan_id, progress, results, done, error}
+# Session-scoped scan state: scan_id -> {scan_id, session_id, progress, results, done, error, city_ids, country_id}
 _scans: Dict[str, Dict[str, Any]] = {}
+# Queue: deque of {scan_id, session_id, city_ids, country_id, rps}
+_scan_queue: deque = deque()
+_current_scan_id: Optional[str] = None
+# History: scan_id -> {session_id, city_ids, country_id, results, done_at}
+_history: Dict[str, Dict[str, Any]] = {}
+_HISTORY_TTL_SEC = 2 * 60 * 60  # 2 hours
 _MAX_SCANS = 50
+
+
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    session_id = request.cookies.get("scan_session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    request.state.session_id = session_id
+    response = await call_next(request)
+    if not request.cookies.get("scan_session_id"):
+        response.set_cookie(key="scan_session_id", value=session_id, max_age=86400 * 30, httponly=False, samesite="lax")
+    return response
+
+
+def _get_session_id(request: Request) -> str:
+    return getattr(request.state, "session_id", "") or str(uuid.uuid4())
+
+
+def _prune_history() -> None:
+    global _history
+    now = time.time()
+    expired = [sid for sid, h in _history.items() if now - (h.get("done_at") or 0) > _HISTORY_TTL_SEC]
+    for sid in expired:
+        del _history[sid]
 
 
 def _render(name: str, **kwargs: Any) -> str:
@@ -88,9 +120,60 @@ def _prune_scans() -> None:
         del _scans[remove_id]
 
 
+async def _queue_worker() -> None:
+    global _current_scan_id, _scans, _history
+    while _scan_queue:
+        item = _scan_queue.popleft()
+        scan_id = item["scan_id"]
+        session_id = item["session_id"]
+        city_ids = item["city_ids"]
+        country_id = item["country_id"]
+        rps = item["rps"]
+        progress = ScanProgress()
+        _scans[scan_id] = {
+            "scan_id": scan_id,
+            "session_id": session_id,
+            "progress": progress,
+            "results": None,
+            "done": False,
+            "error": None,
+            "city_ids": city_ids,
+            "country_id": country_id,
+            "status": "running",
+        }
+        _current_scan_id = scan_id
+        try:
+            results = await run_scan(
+                city_ids=city_ids,
+                country_id=int(country_id) if country_id is not None else None,
+                rps=rps,
+                progress=progress,
+            )
+            if scan_id in _scans:
+                _scans[scan_id]["results"] = results
+                _scans[scan_id]["done"] = True
+                _history[scan_id] = {
+                    "session_id": session_id,
+                    "city_ids": city_ids,
+                    "country_id": country_id,
+                    "results": _pairs_to_rows(results),
+                    "done_at": time.time(),
+                }
+        except Exception as e:
+            if scan_id in _scans:
+                _scans[scan_id]["error"] = str(e)
+                _scans[scan_id]["done"] = True
+                _scans[scan_id]["progress"].error = str(e)
+        finally:
+            _current_scan_id = None
+            if _scan_queue:
+                asyncio.create_task(_queue_worker())
+
+
 @app.post("/api/scan")
 async def api_scan_start(request: Request) -> Dict[str, Any]:
-    global _scans
+    global _scans, _scan_queue
+    session_id = _get_session_id(request)
     try:
         body = await request.json() or {}
     except Exception:
@@ -119,46 +202,68 @@ async def api_scan_start(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="API key not configured")
 
     _prune_scans()
+    _prune_history()
     scan_id = str(uuid.uuid4())
+    queue_position = len(_scan_queue) + (1 if _current_scan_id else 0)
+    _scan_queue.append({
+        "scan_id": scan_id,
+        "session_id": session_id,
+        "city_ids": city_ids,
+        "country_id": country_id,
+        "rps": rps,
+    })
     progress = ScanProgress()
+    queue_position = len(_scan_queue) + (1 if _current_scan_id else 0)
     _scans[scan_id] = {
         "scan_id": scan_id,
+        "session_id": session_id,
         "progress": progress,
         "results": None,
         "done": False,
         "error": None,
+        "city_ids": city_ids,
+        "country_id": country_id,
+        "status": "queued",
     }
+    if not _current_scan_id:
+        asyncio.create_task(_queue_worker())
 
-    async def _run() -> None:
-        try:
-            results = await run_scan(
-                city_ids=city_ids,
-                country_id=int(country_id) if country_id is not None else None,
-                rps=rps,
-                progress=progress,
-            )
-            if scan_id in _scans:
-                _scans[scan_id]["results"] = results
-                _scans[scan_id]["done"] = True
-        except Exception as e:
-            if scan_id in _scans:
-                _scans[scan_id]["error"] = str(e)
-                _scans[scan_id]["done"] = True
-                _scans[scan_id]["progress"].error = str(e)
-
-    asyncio.create_task(_run())
-
-    return {"scan_id": scan_id, "status": "started"}
+    return {"scan_id": scan_id, "status": "queued", "queue_position": queue_position or 1}
 
 
 @app.get("/api/scan/status")
 async def api_scan_status(request: Request) -> Dict[str, Any]:
-    global _scans
+    global _scans, _scan_queue, _current_scan_id
+    session_id = _get_session_id(request)
     stats = get_stats()
     scan_id = request.query_params.get("scan_id")
-    scan = _scans.get(scan_id) if scan_id else (list(_scans.values())[-1] if _scans else None)
-
-    if not scan:
+    if not scan_id:
+        return {
+            "active": False,
+            "done": True,
+            "hotels_loaded": 0,
+            "comparisons_done": 0,
+            "flags_found": 0,
+            "results": [],
+            "error": None,
+            "stats": stats,
+            "progress_pct": 0,
+        }
+    scan = _scans.get(scan_id)
+    if not scan or scan.get("session_id") != session_id:
+        h = _history.get(scan_id)
+        if h and h.get("session_id") == session_id:
+            return {
+                "active": False,
+                "done": True,
+                "hotels_loaded": 0,
+                "comparisons_done": 0,
+                "flags_found": len(h.get("results", [])),
+                "results": h.get("results", []),
+                "error": None,
+                "stats": stats,
+                "progress_pct": 100,
+            }
         return {
             "active": False,
             "done": True,
@@ -175,6 +280,7 @@ async def api_scan_status(request: Request) -> Dict[str, Any]:
     resp = {
         "active": not scan.get("done"),
         "done": scan.get("done", False),
+        "status": scan.get("status", "running"),
         "hotels_loaded": p.hotels_loaded,
         "comparisons_done": p.comparisons_done,
         "flags_found": p.flags_found,
@@ -188,6 +294,41 @@ async def api_scan_status(request: Request) -> Dict[str, Any]:
         resp["results"] = _pairs_to_rows(scan["results"])
 
     return resp
+
+
+@app.get("/api/scan/history")
+async def api_scan_history(request: Request) -> Dict[str, Any]:
+    if not get_api_key():
+        raise HTTPException(status_code=401, detail="API key required")
+    _prune_history()
+    session_id = _get_session_id(request)
+    items = [
+        {
+            "scan_id": sid,
+            "city_ids": h.get("city_ids", []),
+            "country_id": h.get("country_id"),
+            "flags_count": len(h.get("results", [])),
+            "done_at": h.get("done_at"),
+        }
+        for sid, h in _history.items()
+        if h.get("session_id") == session_id
+    ]
+    items.sort(key=lambda x: -(x.get("done_at") or 0))
+    return {"data": items}
+
+
+@app.get("/api/scan/result")
+async def api_scan_result(request: Request) -> Dict[str, Any]:
+    if not get_api_key():
+        raise HTTPException(status_code=401, detail="API key required")
+    scan_id = request.query_params.get("scan_id")
+    if not scan_id:
+        raise HTTPException(status_code=400, detail="scan_id required")
+    session_id = _get_session_id(request)
+    h = _history.get(scan_id)
+    if not h or h.get("session_id") != session_id:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    return {"results": h.get("results", [])}
 
 
 def _union_find_parent(parent: dict, x: int) -> int:

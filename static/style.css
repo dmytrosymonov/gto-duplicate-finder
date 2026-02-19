@@ -276,3 +276,19 @@ td {
   background: rgba(255,255,255,0.8);
   color: #1a1a1a;
 }
+
+.history-table {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 0.9rem;
+}
+
+.history-table td, .history-table th {
+  padding: 8px;
+  text-align: left;
+}
+
+.btn-view {
+  padding: 4px 12px;
+  font-size: 0.85rem;
+}

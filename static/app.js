@@ -22,8 +22,46 @@
   const filterType = document.getElementById('filterType');
   const sortBy = document.getElementById('sortBy');
   const exportExcelBtn = document.getElementById('exportExcel');
+  const loadHistoryBtn = document.getElementById('loadHistory');
+  const historyListEl = document.getElementById('historyList');
 
   let allResults = [];
+
+  if (loadHistoryBtn && historyListEl) {
+    loadHistoryBtn.addEventListener('click', loadHistory);
+  }
+
+  function loadHistory() {
+    fetch('/api/scan/history', { credentials: 'include' })
+      .then(r => r.json())
+      .then(data => {
+        const items = data.data || [];
+        if (!items.length) {
+          historyListEl.innerHTML = '<p class="hint">Нет завершённых сканов.</p>';
+          return;
+        }
+        historyListEl.innerHTML = '<table class="history-table"><thead><tr><th>Города</th><th>Флагов</th><th>Дата</th><th></th></tr></thead><tbody>' +
+          items.map(h => {
+            const dt = h.done_at ? new Date(h.done_at * 1000).toLocaleString() : '';
+            return '<tr><td>' + (h.city_ids ? h.city_ids.join(', ') : '') + '</td><td>' + (h.flags_count || 0) + '</td><td>' + escapeHtml(dt) + '</td><td><button type="button" class="btn-view" data-scan-id="' + escapeHtml(h.scan_id) + '">Показать</button></td></tr>';
+          }).join('') + '</tbody></table>';
+        historyListEl.querySelectorAll('.btn-view').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const sid = btn.getAttribute('data-scan-id');
+            fetch('/api/scan/result?scan_id=' + encodeURIComponent(sid), { credentials: 'include' })
+              .then(r => r.json())
+              .then(d => {
+                allResults = d.results || [];
+                applyFilterAndSort();
+                if (exportExcelBtn) exportExcelBtn.disabled = false;
+                document.getElementById('resultsSection').scrollIntoView();
+              })
+              .catch(() => alert('Ошибка загрузки результата'));
+          });
+        });
+      })
+      .catch(() => alert('Ошибка загрузки истории. Убедитесь, что API key задан.'));
+  }
   let pollInterval = null;
   let allCities = [];
   let selectedCities = [];
@@ -46,6 +84,7 @@
     try {
       const r = await fetch('/api/apikey', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apikey: key })
       });
@@ -63,7 +102,7 @@
 
   async function loadCountries() {
     try {
-      const r = await fetch('/api/countries?rps=' + getRps());
+      const r = await fetch('/api/countries?rps=' + getRps(), { credentials: 'include' });
       if (!r.ok) throw new Error('Ошибка загрузки стран');
       const data = await r.json();
       let items = (data.data || []).slice();
@@ -88,7 +127,7 @@
       return;
     }
     cityListEl.innerHTML = '<div class="city-list-item">Загрузка городов...</div>';
-    fetch('/api/cities?country_id=' + id + '&rps=' + getRps())
+    fetch('/api/cities?country_id=' + id + '&rps=' + getRps(), { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         allCities = (data.data || []).map(c => ({
@@ -195,6 +234,7 @@
       if (cityIds.length === 1) payload.city_id = cityIds[0];
       const r = await fetch('/api/scan', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
@@ -216,12 +256,13 @@
 
   function pollStatus(scanId) {
     const url = scanId ? '/api/scan/status?scan_id=' + encodeURIComponent(scanId) : '/api/scan/status';
-    fetch(url)
+    fetch(url, { credentials: 'include' })
       .then(r => r.json())
       .then(data => {
         hotelsLoaded.textContent = data.hotels_loaded || 0;
         comparisonsDone.textContent = data.comparisons_done || 0;
         flagsFound.textContent = data.flags_found || 0;
+        if (data.status === 'queued') progressPctEl.textContent = 'В очереди...';
         const pct = data.progress_pct != null ? data.progress_pct : 0;
         progressFill.style.width = pct + '%';
         if (progressPctEl) progressPctEl.textContent = pct + '%';
@@ -304,6 +345,7 @@
     try {
       const r = await fetch('/api/export/excel', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ results: rows })
       });
