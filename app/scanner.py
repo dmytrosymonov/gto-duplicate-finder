@@ -12,6 +12,52 @@ from app.api_client import (
 from app.deduplication import DuplicatePair, HotelRecord, find_duplicates
 
 
+def _text_contains_error(obj: Any) -> bool:
+    """Check if any string in obj (recursively) contains 'error' case-insensitive."""
+    if isinstance(obj, str):
+        return "error" in obj.lower()
+    if isinstance(obj, dict):
+        return any(_text_contains_error(v) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return any(_text_contains_error(x) for x in obj)
+    return False
+
+
+_DESCRIPTION_KEYS = (
+    "description", "description_ru", "description_en", "description_uk",
+    "short_description", "long_description", "text", "content",
+)
+
+
+def _extract_description(info: Dict[str, Any]) -> str:
+    """Extract description text from hotel_info API response."""
+    parts = []
+    for key in _DESCRIPTION_KEYS:
+        val = info.get(key)
+        if isinstance(val, str) and val.strip():
+            parts.append(val.strip())
+    if not parts:
+        for k, v in info.items():
+            if isinstance(v, str) and len(v) > 50 and "error" in v.lower():
+                parts.append(v)
+    return " | ".join(parts) if parts else ""
+
+
+_STAR_KEYS = ("stars", "star_rating", "rating", "hotel_stars", "category", "star")
+
+
+def _extract_stars(info: Dict[str, Any]) -> str:
+    """Extract star rating from hotel_info API response."""
+    for key in _STAR_KEYS:
+        val = info.get(key)
+        if val is not None:
+            if isinstance(val, (int, float)):
+                return str(int(val)) if val == int(val) else str(val)
+            if isinstance(val, str) and val.strip():
+                return val.strip()
+    return ""
+
+
 class ScanProgress:
     def __init__(self):
         self.hotels_loaded = 0
@@ -28,6 +74,7 @@ async def load_all_hotels(
     country_id: Optional[int],
     rps: float,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    check_cancel: Optional[Callable[[], bool]] = None,
 ) -> List[HotelRecord]:
     """Load all hotels with pagination."""
     page = 1
@@ -35,6 +82,8 @@ async def load_all_hotels(
     all_hotels: List[HotelRecord] = []
 
     while True:
+        if check_cancel and check_cancel():
+            break
         hotels_data, _ = await fetch_hotels(
             city_id=city_id,
             country_id=country_id,
@@ -96,6 +145,7 @@ async def run_scan(
     country_id: Optional[int],
     rps: float,
     progress: ScanProgress,
+    check_cancel: Optional[Callable[[], bool]] = None,
 ) -> List[DuplicatePair]:
     """Load hotels from multiple cities, enrich, run duplicate detection."""
     reset_stats()
@@ -107,9 +157,18 @@ async def run_scan(
 
     hotels: List[HotelRecord] = []
     for cid in city_ids:
-        city_hotels = await load_all_hotels(cid, country_id, rps, on_progress=on_hotels)
+        if check_cancel and check_cancel():
+            break
+        city_hotels = await load_all_hotels(
+            cid, country_id, rps, on_progress=on_hotels, check_cancel=check_cancel
+        )
         hotels.extend(city_hotels)
     progress.hotels_loaded = len(hotels)
+
+    if check_cancel and check_cancel():
+        progress._phase = "done"
+        progress.progress_pct = 100
+        return find_duplicates(hotels)
 
     # Enrich with hotel_info for hotels that might be in duplicate pairs
     # Build initial candidate set (geo + name overlap)
@@ -132,6 +191,8 @@ async def run_scan(
 
     # Fetch hotel_info for candidates (rate limited)
     for i, hid in enumerate(ids_to_enrich):
+        if check_cancel and check_cancel():
+            break
         if (i + 1) % 10 == 0 or i == 0:
             progress.comparisons_done = i + 1
             if progress._total_to_enrich > 0:
@@ -143,11 +204,62 @@ async def run_scan(
             rec.phone = (info.get("phone") or "").strip()
 
     progress.comparisons_done = len(ids_to_enrich)
-
-    # Run duplicate detection
     progress._phase = "done"
     progress.progress_pct = 100
     pairs = find_duplicates(hotels)
     progress.flags_found = len(pairs)
 
     return pairs
+
+
+async def run_error_scan(
+    city_ids: List[int],
+    country_id: Optional[int],
+    rps: float,
+    progress: ScanProgress,
+    check_cancel: Optional[Callable[[], bool]] = None,
+) -> List[Dict[str, Any]]:
+    """Load hotels, fetch hotel_info, return hotels with 'Error' in any text field."""
+    reset_stats()
+    _clear_hotel_info_cache()
+
+    def on_hotels(n: int, total: int) -> None:
+        progress.hotels_loaded = n
+        progress.progress_pct = min(40, 5 + int(35 * min(1, n / 500)))
+
+    hotels: List[HotelRecord] = []
+    for cid in city_ids:
+        if check_cancel and check_cancel():
+            break
+        city_hotels = await load_all_hotels(
+            cid, country_id, rps, on_progress=on_hotels, check_cancel=check_cancel
+        )
+        hotels.extend(city_hotels)
+    progress.hotels_loaded = len(hotels)
+    progress._phase = "enriching"
+    progress.progress_pct = 40
+
+    bad: List[Dict[str, Any]] = []
+    total = len(hotels)
+    for i, h in enumerate(hotels):
+        if check_cancel and check_cancel():
+            break
+        if (i + 1) % 20 == 0 or i == 0:
+            progress.comparisons_done = i + 1
+            if total > 0:
+                progress.progress_pct = min(95, 40 + int(55 * (i + 1) / total))
+        info = await _get_hotel_info(h.id, rps=rps)
+        if info and _text_contains_error(info):
+            bad.append({
+                "hotel_id": h.id,
+                "name": h.name or "",
+                "address": h.address or "",
+                "stars": _extract_stars(info),
+                "reason": "Contains 'Error' in description",
+            })
+
+    progress.comparisons_done = i + 1
+    progress._phase = "done"
+    progress.progress_pct = 100
+    progress.flags_found = len(bad)
+    return bad

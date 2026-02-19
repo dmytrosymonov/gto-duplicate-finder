@@ -82,6 +82,24 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.buttons-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.btn-alt {
+  background: #c2410c;
+}
+
+.btn-alt:hover {
+  background: #9a3412;
+}
+
+.btn-alt:disabled {
+  background: #999;
+}
+
 .hint {
   margin-left: 8px;
   font-size: 0.85rem;
@@ -134,10 +152,34 @@ button:disabled {
   transition: width 0.2s;
 }
 
+.progress-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.progress-time {
+  font-size: 0.85rem;
+  color: #555;
+}
+
 .progress-pct {
-  margin-top: 4px;
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+.btn-stop {
+  background: #dc2626;
+}
+
+.btn-stop:hover {
+  background: #b91c1c;
+}
+
+.btn-stop:disabled {
+  background: #999;
 }
 
 .table-wrapper a {
@@ -192,6 +234,12 @@ tbody tr:hover {
 
 td {
   font-size: 0.9rem;
+}
+
+td.desc-cell {
+  max-width: 400px;
+  word-wrap: break-word;
+  white-space: pre-wrap;
 }
 
 .badge-auto {

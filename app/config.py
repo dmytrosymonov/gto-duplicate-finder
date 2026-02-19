@@ -17,6 +17,11 @@ def get_api_key() -> Optional[str]:
     return os.environ.get(API_KEY_ENV)
 
 
+def has_saved_api_key() -> bool:
+    """True if API key was explicitly saved via UI (session), not from env."""
+    return bool(_session_api_key)
+
+
 def set_api_key(key: str) -> None:
     """Store API key in session (in-memory only)."""
     global _session_api_key

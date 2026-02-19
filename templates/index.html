@@ -46,8 +46,9 @@
           <div class="selected-cities" id="selectedCities"></div>
         </div>
       </div>
-      <div class="row">
-        <button id="startScan" type="button" disabled>Start scan</button>
+      <div class="row buttons-row">
+        <button id="findDuplicates" type="button" disabled>Find duplicates</button>
+        <button id="findErrors" type="button" class="btn-alt" disabled>Find error descriptions</button>
       </div>
     </section>
 
@@ -76,7 +77,12 @@
       <div class="progress-bar" id="progressBar">
         <div class="progress-fill" id="progressFill"></div>
       </div>
-      <div class="progress-pct" id="progressPct">0%</div>
+      <div class="progress-row">
+        <span class="progress-pct" id="progressPct">0%</span>
+        <span class="progress-time" id="elapsedTime"></span>
+        <span class="progress-time" id="remainingTime"></span>
+        <button id="stopScan" type="button" class="btn-stop" hidden>Остановить</button>
+      </div>
     </section>
 
     <section class="history" id="historySection">
@@ -94,13 +100,14 @@
             <option value="all">Все</option>
             <option value="auto">auto</option>
             <option value="review">review</option>
+            <option value="error">error</option>
           </select>
         </label>
         <label>
           Сортировка:
           <select id="sortBy">
-            <option value="reason">Причина флага</option>
             <option value="score">По скорингу</option>
+            <option value="reason">Причина флага</option>
           </select>
         </label>
         <button id="exportExcel" type="button" disabled>Экспорт в Excel</button>
@@ -124,6 +131,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=10"></script>
 </body>
 </html>

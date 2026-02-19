@@ -6,7 +6,8 @@
   const citySearchInput = document.getElementById('citySearch');
   const cityListEl = document.getElementById('cityList');
   const selectedCitiesEl = document.getElementById('selectedCities');
-  const startScanBtn = document.getElementById('startScan');
+  const findDuplicatesBtn = document.getElementById('findDuplicates');
+  const findErrorsBtn = document.getElementById('findErrors');
   const progressSection = document.getElementById('progressSection');
   const resultsSection = document.getElementById('resultsSection');
   const hotelsLoaded = document.getElementById('hotelsLoaded');
@@ -24,8 +25,12 @@
   const exportExcelBtn = document.getElementById('exportExcel');
   const loadHistoryBtn = document.getElementById('loadHistory');
   const historyListEl = document.getElementById('historyList');
+  const stopScanBtn = document.getElementById('stopScan');
+  const elapsedTimeEl = document.getElementById('elapsedTime');
+  const remainingTimeEl = document.getElementById('remainingTime');
 
   let allResults = [];
+  let resultType = 'duplicates';
 
   if (loadHistoryBtn && historyListEl) {
     loadHistoryBtn.addEventListener('click', loadHistory);
@@ -43,7 +48,7 @@
         historyListEl.innerHTML = '<table class="history-table"><thead><tr><th>Города</th><th>Флагов</th><th>Дата</th><th></th></tr></thead><tbody>' +
           items.map(h => {
             const dt = h.done_at ? new Date(h.done_at * 1000).toLocaleString() : '';
-            return '<tr><td>' + (h.city_ids ? h.city_ids.join(', ') : '') + '</td><td>' + (h.flags_count || 0) + '</td><td>' + escapeHtml(dt) + '</td><td><button type="button" class="btn-view" data-scan-id="' + escapeHtml(h.scan_id) + '">Показать</button></td></tr>';
+            return '<tr><td>' + escapeHtml(h.cities_label || (h.city_ids ? h.city_ids.join(', ') : '')) + '</td><td>' + (h.flags_count || 0) + '</td><td>' + escapeHtml(dt) + '</td><td><button type="button" class="btn-view" data-scan-id="' + escapeHtml(h.scan_id) + '">Показать</button></td></tr>';
           }).join('') + '</tbody></table>';
         historyListEl.querySelectorAll('.btn-view').forEach(btn => {
           btn.addEventListener('click', () => {
@@ -52,6 +57,8 @@
               .then(r => r.json())
               .then(d => {
                 allResults = d.results || [];
+                resultType = d.result_type || 'duplicates';
+                updateTableStructure();
                 applyFilterAndSort();
                 if (exportExcelBtn) exportExcelBtn.disabled = false;
                 document.getElementById('resultsSection').scrollIntoView();
@@ -103,7 +110,11 @@
   async function loadCountries() {
     try {
       const r = await fetch('/api/countries?rps=' + getRps(), { credentials: 'include' });
-      if (!r.ok) throw new Error('Ошибка загрузки стран');
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        if (r.status === 401) throw new Error('Сначала сохраните API key');
+        throw new Error(d.detail || 'Ошибка загрузки стран');
+      }
       const data = await r.json();
       let items = (data.data || []).slice();
       items.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
@@ -121,14 +132,18 @@
     allCities = [];
     renderSelectedCities();
     renderCityList();
-    updateStartScanState();
+    updateScanButtonsState();
     if (!id) {
       cityListEl.innerHTML = '';
       return;
     }
     cityListEl.innerHTML = '<div class="city-list-item">Загрузка городов...</div>';
     fetch('/api/cities?country_id=' + id + '&rps=' + getRps(), { credentials: 'include' })
-      .then(r => r.json())
+      .then(r => {
+        if (r.status === 401) throw new Error('Сначала сохраните API key');
+        if (!r.ok) throw new Error('Ошибка загрузки городов');
+        return r.json();
+      })
       .then(data => {
         allCities = (data.data || []).map(c => ({
           id: Number(c.id) || c.id,
@@ -179,7 +194,7 @@
     }
     renderSelectedCities();
     renderCityList();
-    updateStartScanState();
+    updateScanButtonsState();
   });
 
   function renderSelectedCities() {
@@ -198,14 +213,16 @@
     selectedCities = selectedCities.filter(c => String(c.id) !== idStr);
     renderSelectedCities();
     renderCityList();
-    updateStartScanState();
+    updateScanButtonsState();
   });
 
-  function updateStartScanState() {
-    startScanBtn.disabled = selectedCities.length === 0;
+  function updateScanButtonsState() {
+    const disabled = selectedCities.length === 0;
+    if (findDuplicatesBtn) findDuplicatesBtn.disabled = disabled;
+    if (findErrorsBtn) findErrorsBtn.disabled = disabled;
   }
 
-  startScanBtn.addEventListener('click', async () => {
+  async function startScan(scanType) {
     const cityIds = selectedCities.map(c => c.id).filter(id => id != null && !isNaN(id));
     const countryId = countrySelect.value || null;
     if (!cityIds.length) {
@@ -221,17 +238,29 @@
     progressFill.style.width = '0%';
     if (progressPctEl) progressPctEl.textContent = '0%';
     allResults = [];
+    resultType = scanType;
+    updateTableStructure();
     renderTable([]);
     if (exportExcelBtn) exportExcelBtn.disabled = true;
-    startScanBtn.disabled = true;
+    if (findDuplicatesBtn) findDuplicatesBtn.disabled = true;
+    if (findErrorsBtn) findErrorsBtn.disabled = true;
+    if (stopScanBtn) {
+      stopScanBtn.hidden = false;
+      stopScanBtn.disabled = false;
+      stopScanBtn.textContent = 'Остановить';
+    }
+    if (elapsedTimeEl) elapsedTimeEl.textContent = '';
+    if (remainingTimeEl) remainingTimeEl.textContent = '';
+
+    const payload = {
+      city_ids: cityIds,
+      country_id: countryId ? parseInt(countryId) : null,
+      rps: rps,
+      scan_type: scanType
+    };
+    if (cityIds.length === 1) payload.city_id = cityIds[0];
 
     try {
-      const payload = {
-        city_ids: cityIds,
-        country_id: countryId ? parseInt(countryId) : null,
-        rps: rps
-      };
-      if (cityIds.length === 1) payload.city_id = cityIds[0];
       const r = await fetch('/api/scan', {
         method: 'POST',
         credentials: 'include',
@@ -250,9 +279,48 @@
       pollStatus(currentScanId);
     } catch (e) {
       alert('Ошибка: ' + e.message);
-      startScanBtn.disabled = false;
+      updateScanButtonsState();
     }
-  });
+  }
+
+  if (findDuplicatesBtn) {
+    findDuplicatesBtn.addEventListener('click', () => startScan('duplicates'));
+  }
+  if (findErrorsBtn) {
+    findErrorsBtn.addEventListener('click', () => startScan('errors'));
+  }
+
+  if (stopScanBtn) {
+    stopScanBtn.addEventListener('click', async () => {
+      stopScanBtn.disabled = true;
+      try {
+        const r = await fetch('/api/scan/cancel', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        });
+        const d = await r.json().catch(() => ({}));
+        if (d.status === 'cancelling') {
+          stopScanBtn.textContent = 'Останавливаем...';
+        } else {
+          stopScanBtn.disabled = false;
+        }
+      } catch (e) {
+        stopScanBtn.disabled = false;
+      }
+    });
+  }
+
+  function formatDuration(seconds) {
+    if (seconds < 60) return Math.round(seconds) + ' сек';
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    if (m < 60) return s > 0 ? m + ' мин ' + s + ' сек' : m + ' мин';
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    return (mm > 0 ? h + ' ч ' + mm + ' мин' : h + ' ч');
+  }
 
   function pollStatus(scanId) {
     const url = scanId ? '/api/scan/status?scan_id=' + encodeURIComponent(scanId) : '/api/scan/status';
@@ -262,10 +330,30 @@
         hotelsLoaded.textContent = data.hotels_loaded || 0;
         comparisonsDone.textContent = data.comparisons_done || 0;
         flagsFound.textContent = data.flags_found || 0;
-        if (data.status === 'queued') progressPctEl.textContent = 'В очереди...';
-        const pct = data.progress_pct != null ? data.progress_pct : 0;
-        progressFill.style.width = pct + '%';
-        if (progressPctEl) progressPctEl.textContent = pct + '%';
+        if (data.status === 'queued') {
+          progressPctEl.textContent = 'В очереди...';
+          if (elapsedTimeEl) elapsedTimeEl.textContent = '';
+          if (remainingTimeEl) remainingTimeEl.textContent = '';
+        } else {
+          const pct = data.progress_pct != null ? data.progress_pct : 0;
+          progressFill.style.width = pct + '%';
+          progressPctEl.textContent = pct + '%';
+          const startedAt = data.started_at;
+          if (startedAt && elapsedTimeEl) {
+            const elapsed = (Date.now() / 1000) - startedAt;
+            elapsedTimeEl.textContent = 'Прошло: ' + formatDuration(elapsed);
+          }
+          if (startedAt && remainingTimeEl && pct > 0 && pct < 100) {
+            const elapsed = (Date.now() / 1000) - startedAt;
+            const totalEst = elapsed / (pct / 100);
+            const remaining = totalEst - elapsed;
+            remainingTimeEl.textContent = 'Осталось ~' + formatDuration(remaining);
+          } else if (remainingTimeEl && (pct >= 100 || data.done)) {
+            remainingTimeEl.textContent = '';
+          } else if (remainingTimeEl && !startedAt) {
+            remainingTimeEl.textContent = '';
+          }
+        }
         if (data.stats) {
           apiRequests.textContent = data.stats.request_count || 0;
           avgResponse.textContent = (data.stats.avg_response_ms || 0).toFixed(1);
@@ -274,11 +362,22 @@
         if (data.done) {
           clearInterval(pollInterval);
           pollInterval = null;
-          startScanBtn.disabled = false;
+          if (stopScanBtn) {
+            stopScanBtn.hidden = true;
+            stopScanBtn.disabled = true;
+          }
+          if (remainingTimeEl) remainingTimeEl.textContent = '';
+          if (elapsedTimeEl && data.started_at) {
+            const elapsed = (Date.now() / 1000) - data.started_at;
+            elapsedTimeEl.textContent = 'Выполнено за: ' + formatDuration(elapsed);
+          } else if (elapsedTimeEl) elapsedTimeEl.textContent = '';
+          updateScanButtonsState();
           progressFill.style.width = '100%';
           if (progressPctEl) progressPctEl.textContent = '100%';
           if (data.results) {
             allResults = data.results;
+            resultType = data.result_type || 'duplicates';
+            updateTableStructure();
             applyFilterAndSort();
             if (exportExcelBtn) exportExcelBtn.disabled = false;
           }
@@ -308,26 +407,58 @@
     return '<a href="' + HOTEL_LINK + id + '" target="_blank">' + escapeHtml(String(id)) + '</a>';
   }
 
+  function updateTableStructure() {
+    const thead = document.querySelector('#resultsTable thead tr');
+    const filtersEl = document.getElementById('filters');
+    if (!thead || !filtersEl) return;
+    if (resultType === 'errors') {
+      thead.innerHTML = '<th>Название отеля</th><th>ID</th><th>Звёздность</th>';
+      filtersEl.style.display = 'none';
+    } else {
+      thead.innerHTML = '<th data-sort="hotel_name">Название отеля</th><th data-sort="id1">ID 1</th><th data-sort="id2">ID 2</th><th data-sort="address">Адрес</th><th data-sort="score">Общий скоринг</th><th data-sort="reason">Причина флага</th>';
+      filtersEl.style.display = '';
+      document.querySelectorAll('#resultsTable th[data-sort]').forEach(th => {
+        th.addEventListener('click', () => {
+          const col = th.getAttribute('data-sort');
+          if (col === 'reason') sortBy.value = 'reason';
+          else if (col === 'score' || col === 'id1' || col === 'id2') sortBy.value = 'score';
+          applyFilterAndSort();
+        });
+      });
+    }
+  }
+
   function renderTable(rows) {
-    resultsBody.innerHTML = rows.map(r => {
-      const id2Val = r.id2;
-      const id2Html = Array.isArray(id2Val)
-        ? id2Val.map(id => linkify(id)).join(', ')
-        : linkify(id2Val);
-      const score = r.confidence_score != null ? r.confidence_score.toFixed(3) : '';
-      return `<tr data-flag-type="${escapeHtml(r.flag_type || '')}">
-        <td>${escapeHtml(r.hotel_name || '')}</td>
-        <td>${linkify(r.id1)}</td>
-        <td>${id2Html}</td>
-        <td>${escapeHtml(r.address || '')}</td>
-        <td>${score}</td>
-        <td>${escapeHtml(r.reason || '')}</td>
-      </tr>`;
-    }).join('');
+    if (resultType === 'errors') {
+      resultsBody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${escapeHtml(r.hotel_name || '')}</td>
+          <td>${linkify(r.id1)}</td>
+          <td>${escapeHtml(r.stars || '')}</td>
+        </tr>
+      `).join('');
+    } else {
+      resultsBody.innerHTML = rows.map(r => {
+        const id2Val = r.id2;
+        const id2Html = Array.isArray(id2Val)
+          ? id2Val.map(id => linkify(id)).join(', ')
+          : linkify(id2Val);
+        const score = r.confidence_score != null ? r.confidence_score.toFixed(3) : '';
+        return `<tr data-flag-type="${escapeHtml(r.flag_type || '')}">
+          <td>${escapeHtml(r.hotel_name || '')}</td>
+          <td>${linkify(r.id1)}</td>
+          <td>${id2Html}</td>
+          <td>${escapeHtml(r.address || '')}</td>
+          <td>${score}</td>
+          <td>${escapeHtml(r.reason || '')}</td>
+        </tr>`;
+      }).join('');
+    }
   }
 
   function getFilteredResults() {
     let rows = allResults.slice();
+    if (resultType === 'errors') return rows;
     const ft = filterType.value;
     if (ft !== 'all') rows = rows.filter(r => r.flag_type === ft);
     const sb = sortBy.value;
@@ -347,14 +478,14 @@
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ results: rows })
+        body: JSON.stringify({ results: rows, result_type: resultType })
       });
       if (!r.ok) throw new Error('Ошибка экспорта');
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'duplicates.xlsx';
+      a.download = resultType === 'errors' ? 'error_descriptions.xlsx' : 'duplicates.xlsx';
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
